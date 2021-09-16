@@ -4,7 +4,7 @@ use std::io::prelude::*;
 use walkdir::{DirEntry, WalkDir};
 use sha2::digest::Digest;
 
-fn process<D: Digest + Default, R: Read>(reader: &mut R, name: &str) -> Result<String, std::io::Error> {
+fn process<D: Digest + Default, R: Read>(reader: &mut R) -> Result<String, std::io::Error> {
     const BUFFER_SIZE: usize = 1024;
     
     let mut sh = D::default();
@@ -41,39 +41,84 @@ struct FileInfo {
     sha256: String,
 }
 
+#[derive(serde::Serialize)]
+struct ErrInfo {
+    path: Option<String>,
+    err: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum Info {
+    Hash(FileInfo),
+    Err(ErrInfo),
+}
+
+fn process_entry(entry: walkdir::Result<DirEntry>) -> anyhow::Result<Option<Info>> {
+    let entry = entry?;
+    
+    if !entry.file_type().is_file() {
+        return Ok(None);
+    }
+    
+    let path = entry.path();
+    
+    let path_str = match path.to_str() {
+        Some(s) => s,
+        None => {
+            // panic!("non unicode path {:?}", path.display());
+            return Err(anyhow::anyhow!("non unicode path {:?}", path.display()))
+        },
+    };
+    
+    let mut file = File::open(path)?;
+    let hash_sha256 = process::<sha2::Sha256, File>(&mut file)?;
+    file.rewind()?;
+    let hash_sha1 = process::<sha1::Sha1, File>(&mut file)?;
+    let info = Info::Hash(FileInfo {
+        path: path_str.to_string(),
+        sha1: hash_sha1,
+        sha256: hash_sha256,
+    });
+    
+    Ok(Some(info))
+}
+
 fn main() {
     let walker = WalkDir::new(".").into_iter();
     
-    let mut res: Vec<FileInfo> = Vec::new();
+    let mut res: Vec<Info> = Vec::new();
     
-    for entry in walker {
-        let entry = entry.unwrap();
-        // let metadata = entry.metadata().unwrap();
-        if !entry.file_type().is_file() {
-            continue
+    let mut err_count = 0;
+    for (i, entry) in walker.into_iter().enumerate() {
+        if i % 1000 == 0 {
+            eprintln!("n {} errors {}", i, err_count);
         }
-        
-        // println!("{:?}", entry);
-        let path = entry.path();
-        
-        let path_str = match path.to_str() {
-            Some(s) => s,
-            None => {
-                panic!("non unicode path {:?}", path.display());
-            },
-        };
-        
-        let mut file = File::open(path).unwrap();
-        let hash_sha256 = process::<sha2::Sha256, File>(&mut file, "").unwrap();
-        file.rewind();
-        let hash_sha1 = process::<sha1::Sha1, File>(&mut file, "").unwrap();
-        let info = FileInfo {
-            path: path_str.to_string(),
-            sha1: hash_sha1,
-            sha256: hash_sha256,
-        };
-        res.push(info);
+        match process_entry(entry) {
+            Ok(Some(info)) => {
+                res.push(info);
+            }
+            Ok(None) => (),
+            Err(err) => {
+                err_count += 1;
+                eprintln!("err {:?}", err);
+                let path: Option<String> = if let Some(err) = err.downcast_ref::<walkdir::Error>() {
+                    err.path().and_then(|x| x.to_str()).map(|x| x.to_string())
+                } else if let Some(_err) = err.downcast_ref::<std::io::Error>() {
+                    None
+                } else {
+                    None
+                };
+                let info = Info::Err(ErrInfo {
+                    path: path,
+                    err: format!("{:?}", err),
+                });
+                res.push(info);
+                continue
+            }
+        }
     }
+    eprintln!("\nerrors {}", err_count);
     
     let file = File::create("./file_list.json").unwrap();
     serde_json::to_writer_pretty(&file, &res).unwrap();
