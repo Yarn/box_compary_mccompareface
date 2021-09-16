@@ -35,12 +35,40 @@ jobs:
       #   with:
       #     token: ${{ secrets.GITHUB_TOKEN }}
       #     files: target/release/local_list.exe
+      - name: Create tag
+        uses: actions/github-script@v4
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            
+            await github.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: "refs/tags/tip",
+              sha: context.sha,
+            }).catch (error => error).then(err => {
+              console.log(err);
+              github.git.updateRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: "tags/tip",
+                sha: context.sha,
+                force: true,
+              })
+            })
+      - name: Get current date
+        id: date
+        run: echo "::set-output name=date::$(date +'%Y-%m-%d_%H:%M:%S')"
       - name: Release
         uses: softprops/action-gh-release@v1
         # if: startsWith(github.ref, 'refs/tags/')
         with:
           files: local_list/target/release/local_list.exe
+          # files: local_list/src/main.rs
           tag_name: tip
+          target_commitish: ${{ github.ref }}
+          fail_on_unmatched_files: true
+          body: ${{ steps.date.outputs.date }}
       # - name: Create Release
       #   id: create_release
       #   uses: actions/create-release@v1
