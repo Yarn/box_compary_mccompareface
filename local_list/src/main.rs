@@ -5,7 +5,7 @@ use walkdir::{DirEntry, WalkDir};
 use sha2::digest::Digest;
 
 fn process<D: Digest + Default, R: Read>(reader: &mut R) -> Result<String, std::io::Error> {
-    const BUFFER_SIZE: usize = 1024;
+    const BUFFER_SIZE: usize = 1024*1024;
     
     let mut sh = D::default();
     let mut buffer = [0u8; BUFFER_SIZE];
@@ -34,20 +34,20 @@ fn process<D: Digest + Default, R: Read>(reader: &mut R) -> Result<String, std::
     // Ok("".to_string())
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 struct FileInfo {
     path: String,
     sha1: String,
     sha256: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 struct ErrInfo {
     path: Option<String>,
     err: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 #[serde(untagged)]
 enum Info {
     Hash(FileInfo),
@@ -85,17 +85,25 @@ fn process_entry(entry: walkdir::Result<DirEntry>) -> anyhow::Result<Option<Info
 }
 
 fn main() {
-    let walker = WalkDir::new(".").into_iter();
+    let verbose: bool = std::env::var("verbose").map(|x| !x.is_empty()).unwrap_or(false);
+    
+    let walker = WalkDir::new(".").sort_by_file_name().into_iter();
     
     let mut res: Vec<Info> = Vec::new();
     
     let mut err_count = 0;
     for (i, entry) in walker.into_iter().enumerate() {
-        if i % 1000 == 0 {
+        if i % 1000 == 0 || verbose {
             eprintln!("n {} errors {}", i, err_count);
+        }
+        if verbose {
+            eprintln!("{:?}", entry);
         }
         match process_entry(entry) {
             Ok(Some(info)) => {
+                if verbose {
+                    eprintln!("  {:?}", info);
+                }
                 res.push(info);
             }
             Ok(None) => (),
